@@ -1,0 +1,39 @@
+name: FNO Scan C Vol/OI Alert
+
+on:
+  schedule:
+    # 03:40 UTC = 9:10 AM IST — morning session, runs until ~12:30pm
+    - cron: "40 3 * * 1-5"
+    # 06:40 UTC = 12:10 PM IST — afternoon session, runs until market close
+    - cron: "40 6 * * 1-5"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write   # needed to commit the shared "already alerted" state file
+
+jobs:
+  run-scan-c:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240   # safety cap — real work stops at ~200 min itself
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run Scan C bot
+        env:
+          ANGEL_API_KEY: ${{ secrets.ANGEL_API_KEY }}
+          ANGEL_CLIENT_CODE: ${{ secrets.ANGEL_CLIENT_CODE }}
+          ANGEL_PIN: ${{ secrets.ANGEL_PIN }}
+          ANGEL_TOTP_SECRET: ${{ secrets.ANGEL_TOTP_SECRET }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python main.py
