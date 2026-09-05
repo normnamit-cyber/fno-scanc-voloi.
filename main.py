@@ -240,6 +240,25 @@ def send_telegram(text):
 # MAIN
 # ---------------------------------------------------------------------------
 
+def stop_feed(sws):
+    """Close the WebSocket connection. Tries the documented method first;
+    falls back to a couple of alternates in case the exact method name
+    ever drifts between SmartApi versions, so this can't silently fail
+    the way it just did."""
+    for attempt in ("close_connection", "close"):
+        try:
+            getattr(sws, attempt)()
+            print(f"[info] Feed closed via sws.{attempt}().")
+            return
+        except AttributeError:
+            continue
+        except Exception as e:
+            print(f"[warn] sws.{attempt}() raised: {e}")
+            return
+    print("[warn] Could not find a working close method on sws — "
+          "the job will still end naturally once GitHub's timeout hits.")
+
+
 def main():
     job_start = datetime.now(IST)
     today_str = job_start.strftime("%Y-%m-%d")
@@ -284,7 +303,7 @@ def main():
 
             now = datetime.now(IST)
             if should_stop(now):
-                wsapp.close_connection()
+                stop_feed(sws)
         except Exception as e:
             print(f"[warn] on_data error: {e}")
 
