@@ -1,9 +1,5 @@
-smartapi-python
-pyotp
-requests
-websocket-client
-   smartapi-python
-   pyotp
-   requests
-   websocket-client
-   logzero
+smartapi-python==1.5.5
+pyotp==2.10.0
+requests==2.33.1
+websocket-client==1.9.2
+logzero==1.7.0
