@@ -23,6 +23,7 @@ import time
 import socket
 import json
 import subprocess
+import threading
 import concurrent.futures
 import pyotp
 import requests
@@ -32,6 +33,20 @@ from SmartApi import SmartConnect
 from SmartApi.smartWebSocketV2 import SmartWebSocketV2
 
 socket.setdefaulttimeout(30)
+
+
+def force_exit_after(seconds):
+    """Safety net: if the process hasn't exited naturally within this many
+    seconds (e.g. because the WebSocket library's close() didn't actually
+    break its internal loop), forcibly end the process ourselves rather
+    than let GitHub's hard job timeout be the only thing that stops it."""
+    def _exit():
+        print(f"[warn] Forcing process exit after {seconds}s grace period "
+              f"(the connection didn't close cleanly on its own).")
+        os._exit(0)
+    t = threading.Timer(seconds, _exit)
+    t.daemon = True
+    t.start()
 
 # ---------------------------------------------------------------------------
 # CONFIG
@@ -308,6 +323,22 @@ def main():
                                         # can see Angel One's real field names
                                         # instead of guessing again
 
+    session_finalized = {"done": False}
+
+    def finalize_and_stop(reason):
+        """Save+commit today's alert state BEFORE attempting to close the
+        connection — this way, even if the connection hangs and we have to
+        force-exit the whole process a few seconds later, the state is
+        already safely saved rather than lost."""
+        if session_finalized["done"]:
+            return
+        session_finalized["done"] = True
+        print(f"[info] Finalizing session ({reason})...")
+        save_alerted_today(today_str, alerted_today)
+        commit_alerted_state()
+        stop_feed(sws)
+        force_exit_after(20)  # backup, in case close() doesn't actually break the loop
+
     def on_data(wsapp, message):
         try:
             if debug_ticks_shown["count"] < 3:
@@ -332,7 +363,7 @@ def main():
 
             now = datetime.now(IST)
             if should_stop(now):
-                stop_feed(sws)
+                finalize_and_stop("scheduled stop time reached")
         except Exception as e:
             print(f"[warn] on_data error: {e}")
 
@@ -356,8 +387,11 @@ def main():
 
     sws.connect()  # blocks until closed
 
-    save_alerted_today(today_str, alerted_today)
-    commit_alerted_state()
+    if not session_finalized["done"]:
+        # connection ended on its own (error/disconnect) before our stop
+        # condition ever triggered — still make sure state gets saved
+        save_alerted_today(today_str, alerted_today)
+        commit_alerted_state()
     print("[info] Session ended.")
 
 
