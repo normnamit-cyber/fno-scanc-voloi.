@@ -33,6 +33,7 @@ jobs:
 
       - name: Run Scan C bot
         env:
+          PYTHONUNBUFFERED: "1"
           ANGEL_API_KEY: ${{ secrets.ANGEL_API_KEY }}
           ANGEL_CLIENT_CODE: ${{ secrets.ANGEL_CLIENT_CODE }}
           ANGEL_PIN: ${{ secrets.ANGEL_PIN }}
