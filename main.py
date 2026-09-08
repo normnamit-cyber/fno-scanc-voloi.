@@ -23,6 +23,7 @@ import time
 import socket
 import json
 import subprocess
+import concurrent.futures
 import pyotp
 import requests
 from datetime import datetime, timedelta, timezone
@@ -60,14 +61,34 @@ INSTRUMENT_MASTER_URL = "https://margincalculator.angelbroking.com/OpenAPI_File/
 # ---------------------------------------------------------------------------
 
 def login():
+    """
+    Runs the actual login call on a background thread with a hard 30-second
+    deadline that we enforce ourselves — this guarantees we give up after
+    30s no matter what timeout (or lack of one) the SmartApi library itself
+    uses internally, which is what let the previous hang slip through.
+    """
     print("[info] Attempting Angel One login...")
-    try:
+
+    def _do_login():
         smart_api = SmartConnect(api_key=ANGEL_API_KEY)
         totp = pyotp.TOTP(ANGEL_TOTP_SECRET).now()
         data = smart_api.generateSession(ANGEL_CLIENT_CODE, ANGEL_PIN, totp)
-    except (socket.timeout, requests.exceptions.RequestException) as e:
-        print(f"[error] Login request timed out or failed at the network level: {e}")
-        raise
+        return smart_api, data
+
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    future = executor.submit(_do_login)
+    try:
+        smart_api, data = future.result(timeout=30)
+    except concurrent.futures.TimeoutError:
+        print("[error] Login did not respond within 30 seconds. This usually "
+              "means Angel One's servers aren't responding to this connection "
+              "at all — could be an off-hours/quiet-server issue, or requests "
+              "from GitHub's servers being throttled. Not a code bug at this "
+              "point; worth re-testing during regular market hours.")
+        executor.shutdown(wait=False)
+        raise RuntimeError("Angel One login timed out after 30 seconds")
+    executor.shutdown(wait=False)
+
     if not data.get("status"):
         raise RuntimeError(f"Angel One login failed: {data}")
     auth_token = data["data"]["jwtToken"]
@@ -283,8 +304,16 @@ def main():
         elapsed_min = (now - job_start).total_seconds() / 60
         return now >= close_t or elapsed_min >= MAX_RUN_MINUTES
 
+    debug_ticks_shown = {"count": 0}  # print the first few raw payloads so we
+                                        # can see Angel One's real field names
+                                        # instead of guessing again
+
     def on_data(wsapp, message):
         try:
+            if debug_ticks_shown["count"] < 3:
+                print(f"[debug] Raw tick payload: {message}")
+                debug_ticks_shown["count"] += 1
+
             token = message.get("token")
             if token is None or token not in contracts or token in alerted_today:
                 return
@@ -333,4 +362,15 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        import traceback
+        error_summary = f"{type(e).__name__}: {e}"
+        print(f"[fatal] Scan C crashed: {error_summary}")
+        traceback.print_exc()
+        try:
+            send_telegram(f"🔴 *Scan C crashed*\n{error_summary}\n\nCheck the GitHub Actions log for details.")
+        except Exception:
+            pass
+        raise
